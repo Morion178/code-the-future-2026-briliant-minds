@@ -2,10 +2,10 @@
 #include <Adafruit_MPU6050.h>
 #include <Adafruit_Sensor.h>
 #include <Wire.h>
-#include "DHT.h"
+//#include "DHT.h"
 
 Adafruit_MPU6050 mpu;
-DHT dht(2, DHT22);
+//DHT dht(2, DHT22);
 
 float currentSpeed = 0.0;
 float maxSpeed = 50.0;
@@ -38,9 +38,9 @@ int switchModeButton = 0;
 int mode = 0;
 int lastSwitchState = HIGH;
 
-const int sensorPin = 4; // GPIO 4
-float lastTemp = 0;
-unsigned long lastADCRead = 0;
+//const int sensorPin = 4;
+//float lastTemp = 0;
+//unsigned long lastADCRead = 0;
 
 void setup() {
   Serial.begin(115200);
@@ -59,8 +59,8 @@ void setup() {
   mpu.setGyroRange(MPU6050_RANGE_500_DEG);
   mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
 
-  dht.begin();
-  analogReadResolution(12);
+  //dht.begin();
+  //analogReadResolution(12);
 }
 
 void loop() {
@@ -171,18 +171,30 @@ void loop() {
     data |= ((doIHonk & 0x01) << 2);
     data |= ((gear & 0x07) << 3);
 
-    Serial.write(data);
+    //Serial.write(data);
     //Serial.println(data);
+
+    Serial.print(accelerate);
+    Serial.print(",");
+    Serial.print(stop);
+    Serial.print(",");
+    Serial.print(doIHonk);
+    Serial.print(",");
+    Serial.println(gear);
 
   } else if (mode == 1) {
     
+    /*
     sensors_event_t a, g, te;
     mpu.getEvent(&a, &g, &te);
 
     Serial.printf("A:%.2f,%.2f,%.2f | G:%.2f,%.2f,%.2f\n", 
     a.acceleration.x, a.acceleration.y, a.acceleration.z,
     g.gyro.x, g.gyro.y, g.gyro.z);
+    */
+    //^^^RESTORE^^^
   
+    /*
     static unsigned long lastUpdate = 0;
   
     if (millis() - lastUpdate > 3000) {
@@ -192,6 +204,23 @@ void loop() {
       Serial.printf("Humidity: %.1f%% | Temp: %.1f°C\n", h, t);
       lastUpdate = millis();
     }
+    */
+
+    int gasRaw = analogRead(4); 
+    
+    // Map raw value (0-4095) to a Purity percentage (100% is clean)
+    float purity = map(gasRaw, 0, 4095, 100, 0);
+
+    // 3. GAS CHECK LOGIC
+    // Threshold: adjust this based on your room's "clean" value.
+    // Usually, anything below 85% purity suggests smoke or gas.
+    bool gasDetected = (purity < 85.0); 
+
+    if (analogRead(4) > 2500) { // If gas is too high
+    currentSpeed = 0;       // Forced stop
+    accelerate = false;
+    Serial.println("ENGINE CUT: GAS LEAK DETECTED");
+}
 
   delay(50);
 
