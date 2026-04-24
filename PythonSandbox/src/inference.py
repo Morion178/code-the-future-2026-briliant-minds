@@ -1,9 +1,12 @@
 import torch
 import joblib
 import numpy as np
+import serial
+import time
+import math
 from model import EngineTwinModel
 
-# 1. Initialize Model (14 features: Fault is excluded from training input)
+# --- 1. INITIALIZE MODEL & SCALERS ---
 model = EngineTwinModel(input_dim=14, hidden_dim=256, output_dim=4)
 model.load_state_dict(torch.load("../models/engine_twin.pth", weights_only=True))
 model.eval()
@@ -11,51 +14,47 @@ model.eval()
 scaler_X = joblib.load("../models/scaler_X.pkl")
 scaler_y = joblib.load("../models/scaler_y.pkl")
 
-# 2. REAL INITIAL STATE (from your snippet)
-# Order: MAP, TPS, Force, Power, RPM, Consumption L/H, Consumption L/100KM, Speed, CO, HC, CO2, O2, Lambda, AFR
-initial_state = np.array([
-    3.549,  # MAP
-    1.889,  # TPS
-    7.428,  # Force
-    5.227,  # Power
-    1500.7,  # RPM
-    3.057,  # Cons L/H
-    11.72,  # Cons L/100KM
-    24.901,  # Speed
-    0.46,  # CO
-    196.1,  # HC
-    14.356,  # CO2
-    1.08,  # O2
-    1.047,  # Lambda
-    15.385  # AFR
-])
+# --- 2. SERIAL SETUP ---
+SERIAL_PORT = 'COM15'
+BAUD_RATE = 115200
 
+try:
+    ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=0.1)
+    print(f"Connected to ESP32 on {SERIAL_PORT}")
+except Exception as e:
+    print(f"Serial Error: {e}")
+    ser = None
+
+# --- 3. STATE & EXPONENTIAL CONFIG ---
+# Corrected to 14 features (removed leading 0)
+initial_state = np.array([
+    3.549, 1.889, 7.428, 5.227, 1192.769, 3.057, 11.72, 24.901,
+    0.46, 196.089, 14.356, 1.08, 1.047, 15.385
+])
 history_buffer = [initial_state.copy() for _ in range(5)]
+
+# Exponential Variables
+t_progress = 0.0  # The 0.0 to 1.0 incrementer
+k_val = 2.5  # Curvature (Higher = more exponential/aggressive)
+inc_speed = 0.02  # Speed of rev up (t increases by this much per step)
+dec_speed = 0.015  # Speed of rev down (t decreases by this much per step)
 
 
 def run_simulation_step(new_tps, is_braking=False):
     global history_buffer
-
     current_row = history_buffer[-1].copy()
 
-    # 1. BRAKE LOGIC OVERRIDE
     if is_braking:
-        # If braking, force throttle to idle regardless of input
         active_tps = 1.889
-        # Apply a "Friction Decay" to the speed currently in the buffer (index 7)
-        # 0.85 means losing 15% speed per step—change to 0.95 for a softer brake
         current_row[7] = current_row[7] * 0.85
     else:
         active_tps = new_tps
 
-    current_row[1] = active_tps  # TPS is index 1
-
-    # Update history
+    current_row[1] = active_tps
     history_buffer.append(current_row)
     if len(history_buffer) > 5:
         history_buffer.pop(0)
 
-    # 2. INFERENCE
     history_array = np.array(history_buffer)
     history_scaled = scaler_X.transform(history_array)
     input_tensor = torch.FloatTensor(history_scaled).unsqueeze(0)
@@ -66,56 +65,94 @@ def run_simulation_step(new_tps, is_braking=False):
     prediction_real = scaler_y.inverse_transform(prediction_scaled.numpy())[0]
     ai_rpm = prediction_real[0]
 
-    # 3. DYNAMIC RANGE CORRECTION (Using active_tps)
+    # Dynamic Range Correction
     if active_tps <= 2.0:
         res_rpm = (ai_rpm * 0.2) + (1192.0 * 0.8)
-        # If braking, we want the RPM to drop even faster toward idle
-        if is_braking:
-            res_rpm = res_rpm * 0.9  # Additional 10% RPM drop per step
-
+        if is_braking: res_rpm *= 0.9
     elif 3.0 < active_tps < 4.8:
         weight = (active_tps - 3.0) / (4.8 - 3.0)
         target_mid = 7500.0
         res_rpm = (ai_rpm * (1 - weight)) + (target_mid * weight)
-
     elif active_tps >= 4.8:
         res_rpm = (ai_rpm * 0.2) + (9000.0 * 0.8)
     else:
         res_rpm = ai_rpm
 
-    # 4. FEEDBACK UPDATE
-    # When braking, we use our decayed speed instead of the AI's predicted speed
     final_speed = current_row[7] if is_braking else prediction_real[1]
-
-    history_buffer[-1][4] = res_rpm  # RPM
-    history_buffer[-1][7] = final_speed  # Speed
-    history_buffer[-1][10] = prediction_real[2]  # CO2
-    history_buffer[-1][6] = prediction_real[3]  # Fuel
+    history_buffer[-1][4], history_buffer[-1][7] = res_rpm, final_speed
+    history_buffer[-1][10], history_buffer[-1][6] = prediction_real[2], prediction_real[3]
 
     return [res_rpm, prediction_real[2], prediction_real[3], final_speed]
 
-# --- EXTENDED STABILITY DRIVE CYCLE ---
-# We use longer durations to ensure the GRU's hidden state reaches an equilibrium.
-dynamic_scenario = [
-    (1.9, 20, "INITIAL IDLE"),   # Establish floor
-    (5.0, 30, "ACCELERATING"),   # Get up to max speed/RPM
-    (1.9, 20, "EMERGENCY BRAKE"), # New brake test stage
-    (1.9, 30, "POST-BRAKE IDLE")  # Verify it returns to stable idle
-]
 
-print(f"{'Stage':<16} | {'Step':<4} | {'TPS':<4} | {'RPM':<8} | {'CO2':<6} | {'Fuel':<6} | {'Speed':<6}")
-print("-" * 75)
+# --- 4. REAL-TIME LOOP ---
+print(f"{'Btn':<4} | {'Brk':<4} | {'Gear':<4} | {'T-Prog':<8} | {'Exp-TPS':<7} | {'RPM':<8}")
+print("-" * 65)
 
-for tps_val, duration, label in dynamic_scenario:
-    for i in range(duration):
-        # Trigger the braking logic only during the "EMERGENCY BRAKE" stage
-        braking_active = (label == "EMERGENCY BRAKE")
+# Initialize persistent states
+btn_pressed = 0
+brake_input = False
+current_gear = 0
+honk_active = False
 
-        # results now returns [RPM, CO2, Fuel, Speed]
-        results = run_simulation_step(tps_val, is_braking=braking_active)
+# Initialize persistent states before the loop
 
+try:
+    while True:
+        start_time = time.time()
+
+        # 1. READ AND DECODE SERIAL
+        if ser and ser.in_waiting > 0:
+
+            if ser.in_waiting > 100:  # If more than ~5-10 lines are backed up
+                ser.reset_input_buffer()
+            try:
+                # Read raw bytes first to see if ANYTHING is coming in
+                raw_data = ser.readline()
+                line = raw_data.decode('utf-8', errors='ignore').strip()
+
+                # DEBUG: Uncomment the line below to see EVERY raw packet
+
+
+                if line and "," in line:
+                    parts = line.split(',')
+                    if len(parts) >= 4:
+                        btn_pressed = int(parts[0])
+                        brake_input = bool(int(parts[1]))
+                        honk_active = bool(int(parts[2]))
+                        current_gear = int(parts[3])
+                        print(f"DEBUG RAW: {btn_pressed, brake_input, honk_active, current_gear}")
+                        # Successful read! Let's mark it
+                        # print("Data Received!")
+
+            except Exception as e:
+                print(f"Decode Error: {e}")
+                continue
+
+        # 2. PHYSICS & AI LOGIC (Always runs)
+        # Update t_progress based on the last known btn_pressed state
+        if btn_pressed == 1:
+            t_progress += inc_speed
+        else:
+            t_progress -= dec_speed
+
+        t_progress = max(0.0, min(1.0, t_progress))
+
+        # Exponential Mapping
+        exp_factor = (math.exp(k_val * t_progress) - 1) / (math.exp(k_val) - 1)
+        current_tps = 1.889 + (5.0 - 1.889) * exp_factor
+
+        # 3. RUN INFERENCE
+        results = run_simulation_step(current_tps, is_braking=brake_input)
+
+        # 4. PRINT (Single line update)
         print(
-            f"{label:<16} | {i + 1:<4} | {tps_val:<4.1f} | {results[0]:<8.2f} | {results[1]:<6.2f} | {results[2]:<6.2f} | {results[3]:<6.2f}")
+            f"Acc: {btn_pressed} | Brk: {int(brake_input)} | Gear: {current_gear} | TPS: {current_tps:.2f} | RPM: {results[0]:.2f}",
+            end='\r')
 
-print("-" * 75)
-print("Brake Test Complete.")
+        # 5. CONSTANT 50Hz TIMING
+        time.sleep(0.02)
+
+except KeyboardInterrupt:
+    if ser: ser.close()
+    print("\nSimulation stopped.")
