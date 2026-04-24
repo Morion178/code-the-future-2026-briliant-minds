@@ -5,7 +5,7 @@
 #include "DHT.h"
 
 Adafruit_MPU6050 mpu;
-DHT dht(4, DHT22);
+DHT dht(2, DHT22);
 
 float currentSpeed = 0.0;
 float maxSpeed = 50.0;
@@ -38,6 +38,10 @@ int switchModeButton = 0;
 int mode = 0;
 int lastSwitchState = HIGH;
 
+const int sensorPin = 4; // GPIO 4
+float lastTemp = 0;
+unsigned long lastADCRead = 0;
+
 void setup() {
   Serial.begin(115200);
   pinMode (accButtonPin, INPUT_PULLUP);
@@ -56,6 +60,7 @@ void setup() {
   mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
 
   dht.begin();
+  analogReadResolution(12);
 }
 
 void loop() {
@@ -167,31 +172,28 @@ void loop() {
     data |= ((gear & 0x07) << 3);
 
     Serial.write(data);
+    //Serial.println(data);
 
   } else if (mode == 1) {
+    
     sensors_event_t a, g, te;
     mpu.getEvent(&a, &g, &te);
 
     Serial.printf("A:%.2f,%.2f,%.2f | G:%.2f,%.2f,%.2f\n", 
     a.acceleration.x, a.acceleration.y, a.acceleration.z,
     g.gyro.x, g.gyro.y, g.gyro.z);
+  
+    static unsigned long lastUpdate = 0;
+  
+    if (millis() - lastUpdate > 3000) {
+      float h = dht.readHumidity();
+      float t = dht.readTemperature();
 
-    static unsigned long lastDHTRead = 0;
-    static float lastTemp = 0;
-    
-    if (millis() - lastDHTRead > 2000) {
-      float temp = dht.readTemperature();
-      if (!isnan(temp)) {
-        lastTemp = temp;
-      }
-      lastDHTRead = millis();
+      Serial.printf("Humidity: %.1f%% | Temp: %.1f°C\n", h, t);
+      lastUpdate = millis();
     }
-
-    Serial.print("| Temp: ");
-    if (lastTemp == 0) Serial.println("Waiting...");
-    else Serial.println(lastTemp);
-  }
 
   delay(50);
 
+  }
 }
