@@ -1,1 +1,1 @@
-Find .slx matlab executable in: VirtualMoto\VirtualMoto\System\SiemensCicle\ConfiguredVirtualVehicle.slx
+This is a functional motorcycle simulator made by training an AI with PyTorch with the EngineFaultDB dataset by Leo Thomas, that gets it's inputs from an Esp32 board and sends the relevant data to a Java app through UDP, that itself displays it and plays a digital sound recreation of it

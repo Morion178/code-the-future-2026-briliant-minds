@@ -6,7 +6,7 @@ import java.io.*;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.util.ArrayList;
-import javax.sound.sampled.*; // New import for audio
+import javax.sound.sampled.*;
 
 public class MotoCleanLogApp extends JFrame {
     private boolean isDisplayActive = false;
@@ -17,7 +17,7 @@ public class MotoCleanLogApp extends JFrame {
     private LiveChart liveChart;
 
     private SourceDataLine engineLine;
-    private byte[] rawEngineBytes; // The original idle sound
+    private byte[] rawEngineBytes; // sunet original idle
     private float currentPitch = 1.0f;
     private final int BUFFER_SIZE = 4096;
 
@@ -35,14 +35,12 @@ public class MotoCleanLogApp extends JFrame {
         resetFile();
         loadEngineSound();
         initUI();
-        loadHonkSound(); // Load the audio file into memory
+        loadHonkSound();
         startUDPListener();
     }
 
-    // New method to load your .wav file
     private void loadHonkSound() {
         try {
-            // Ensure honk.wav is in your project root folder
             File soundFile = new File("C:\\Users\\Omen\\Desktop\\TemeFac\\AN2\\SiemensHackaton\\code-the-future-2026-briliant-minds\\LogAppJava\\LogAppSiemensBike\\src\\Goofy ahh car honk sound effect.wav");
             AudioInputStream audioStream = AudioSystem.getAudioInputStream(soundFile);
             honkClip = AudioSystem.getClip();
@@ -258,7 +256,7 @@ public class MotoCleanLogApp extends JFrame {
                 int gear = Integer.parseInt(p[6]); // New gear variable
 
                 float pitch = (float)(rpm / 1200.0f); // 1.0 pitch at 1200 RPM
-                currentPitch = Math.max(0.4f, Math.min(pitch, 5.0f));
+                currentPitch = Math.max(0.4f, Math.min(pitch, 3.0f));
 
                 // Log to console so you can see the values changing
                 System.out.println("DEBUG -> RPM: " + (int)rpm + " | Target Pitch: " + currentPitch);

@@ -6,20 +6,20 @@ import joblib
 from sklearn.preprocessing import RobustScaler, MinMaxScaler
 from model import EngineTwinModel
 
-# 1. Load Original Master (NO OVERSAMPLING)
+#load dataset
 df = pd.read_csv("../data/Engine_Master_9000.csv")
 
 features = ['TPS', 'MAP', 'Force', 'Power', 'RPM', 'Speed', 'Consumption L/H', 'Consumption L/100KM', 'CO', 'HC', 'CO2', 'O2', 'Lambda', 'AFR']
 targets = ['RPM', 'Speed', 'CO2', 'Consumption L/100KM']
 
-# 2. Scaling (MinMaxScaler helps define the "Floor")
+# scaler for precise data analysis
 scaler_X = RobustScaler()
 scaler_y = MinMaxScaler()
 
 X_scaled = scaler_X.fit_transform(df[features].values)
 y_scaled = scaler_y.fit_transform(df[targets].values)
 
-# 3. Create Sequences
+#5 data read sequences
 def create_sequences(X, y, window_size=5):
     X_seq, y_seq = [], []
     for i in range(len(X) - window_size):
@@ -38,7 +38,7 @@ rpm_targets = y_seq[:, 0]
 # Weight formula: higher weight for values closer to 0 (Idle)
 weights = torch.FloatTensor(1.0 + 3.0 * (1.0 - rpm_targets)).unsqueeze(1)
 
-# 5. Model Setup
+# setup
 model = EngineTwinModel(input_dim=len(features), hidden_dim=256, output_dim=len(targets))
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 

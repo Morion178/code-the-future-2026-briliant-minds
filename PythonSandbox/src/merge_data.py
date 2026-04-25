@@ -3,11 +3,10 @@ import numpy as np
 
 
 def generate_accurate_master():
-    # 1. Load your cleaned healthy data
-    # Ensure this file was created using only Fault == 0 rows
+    #load initial csv
     df_healthy = pd.read_csv("../data/Engine_Healthy_Only.csv")
 
-    # Identify the last known good state to prevent the "Big Jump"
+    #find last row
     last_row = df_healthy.iloc[-1]
     last_tps = last_row['TPS']
     last_rpm = last_row['RPM']
