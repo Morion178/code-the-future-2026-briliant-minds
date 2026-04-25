@@ -16,6 +16,11 @@ public class MotoCleanLogApp extends JFrame {
     private JLabel lblRPM, lblViteza, lblTemp, lblEmisii, lblConsum, lblEcoMode, lblHonkIndicator;
     private LiveChart liveChart;
 
+    private SourceDataLine engineLine;
+    private byte[] rawEngineBytes; // The original idle sound
+    private float currentPitch = 1.0f;
+    private final int BUFFER_SIZE = 4096;
+
     private final int PORT = 5005;
     private final String FILE_NAME = "telemetrie.csv";
     private boolean isConnected = false;
@@ -28,6 +33,7 @@ public class MotoCleanLogApp extends JFrame {
 
     public MotoCleanLogApp() {
         resetFile();
+        loadEngineSound();
         initUI();
         loadHonkSound(); // Load the audio file into memory
         startUDPListener();
@@ -51,6 +57,49 @@ public class MotoCleanLogApp extends JFrame {
             honkClip.setFramePosition(0); // Rewind to start
             honkClip.start();
         }
+    }
+
+    private void loadEngineSound() {
+        try {
+            File engineFile = new File("C:\\Users\\Omen\\Desktop\\TemeFac\\AN2\\SiemensHackaton\\code-the-future-2026-briliant-minds\\LogAppJava\\LogAppSiemensBike\\src\\Bike Idle Engine Sound Loop.wav");
+            AudioInputStream stream = AudioSystem.getAudioInputStream(engineFile);
+            AudioFormat format = stream.getFormat();
+
+            rawEngineBytes = stream.readAllBytes();
+
+            DataLine.Info info = new DataLine.Info(SourceDataLine.class, format);
+            engineLine = (SourceDataLine) AudioSystem.getLine(info);
+            engineLine.open(format);
+            engineLine.start();
+
+            // New Thread: Software Resampler
+            new Thread(() -> {
+                float playbackIndex = 0;
+                byte[] outputBuffer = new byte[BUFFER_SIZE];
+                int frameSize = format.getFrameSize(); // usually 2 for mono, 4 for stereo
+
+                while (true) {
+                    for (int i = 0; i < BUFFER_SIZE; i += frameSize) {
+                        int intIndex = (int) playbackIndex;
+                        // Loop logic
+                        if (intIndex * frameSize >= rawEngineBytes.length - frameSize) {
+                            playbackIndex = 0;
+                            intIndex = 0;
+                        }
+
+                        // Copy the "frame" (Left/Right samples)
+                        for (int j = 0; j < frameSize; j++) {
+                            outputBuffer[i + j] = rawEngineBytes[intIndex * frameSize + j];
+                        }
+
+                        // The secret: Move the index by the pitch factor instead of by 1
+                        playbackIndex += currentPitch;
+                    }
+                    engineLine.write(outputBuffer, 0, BUFFER_SIZE);
+                }
+            }).start();
+
+        } catch (Exception e) { e.printStackTrace(); }
     }
 
     private void initUI() {
@@ -207,6 +256,12 @@ public class MotoCleanLogApp extends JFrame {
                 double l100 = Double.parseDouble(p[4]);
                 int honk = Integer.parseInt(p[5]);
                 int gear = Integer.parseInt(p[6]); // New gear variable
+
+                float pitch = (float)(rpm / 1200.0f); // 1.0 pitch at 1200 RPM
+                currentPitch = Math.max(0.4f, Math.min(pitch, 5.0f));
+
+                // Log to console so you can see the values changing
+                System.out.println("DEBUG -> RPM: " + (int)rpm + " | Target Pitch: " + currentPitch);
 
                 saveToFile(data);
 

@@ -36,6 +36,7 @@ GEAR_RATIOS = {
 FINAL_DRIVE = 3.42  # Differential ratio
 WHEEL_CIRCUMFERENCE = 2.0  # Meters (approx 18-inch wheel + tire)
 
+
 def send_to_java(rpm, speed, honk, gear):
     """
     Java expects: RPM, Speed, Temp, CO2, L/100, Honk (6 parts)
