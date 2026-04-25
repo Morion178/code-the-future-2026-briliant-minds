@@ -23,8 +23,20 @@ UDP_IP = "127.0.0.1"  # "127.0.0.1" if Java is on the same PC
 UDP_PORT = 5005       # Pick a port (ensure it's the same in Java)
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
+GEAR_RATIOS = {
+    0: 0.0,    # Neutral
+    1: 3.5,    # 1st Gear
+    2: 2.1,    # 2nd Gear
+    3: 1.5,    # 3rd Gear
+    4: 1.1,    # 4th Gear
+    5: 0.9,    # 5th Gear
+    6: 0.7,     # 6th Gear (Overdrive)
+    7: 0.6
+}
+FINAL_DRIVE = 3.42  # Differential ratio
+WHEEL_CIRCUMFERENCE = 2.0  # Meters (approx 18-inch wheel + tire)
 
-def send_to_java(rpm, speed, honk):
+def send_to_java(rpm, speed, honk, gear):
     """
     Java expects: RPM, Speed, Temp, CO2, L/100, Honk (6 parts)
     """
@@ -41,7 +53,8 @@ def send_to_java(rpm, speed, honk):
         round(sim_temp, 1),
         round(sim_co2, 0),
         round(sim_l100, 1),
-        int(honk)
+        int(honk),
+        int(gear)
     ]
 
     message = ",".join(map(str, data_list))
@@ -69,20 +82,17 @@ inc_speed = 0.02  # Speed of rev up (t increases by this much per step)
 dec_speed = 0.015  # Speed of rev down (t decreases by this much per step)
 
 
-def run_simulation_step(new_tps, is_braking=False):
+def run_simulation_step(new_tps, gear, is_braking=False):
     global history_buffer
     current_row = history_buffer[-1].copy()
 
-    if is_braking:
-        active_tps = 1.889
-        current_row[7] = current_row[7] * 0.85
-    else:
-        active_tps = new_tps
-
+    # 1. TPS & Braking Logic
+    active_tps = 1.889 if is_braking else new_tps
     current_row[1] = active_tps
+
+    # 2. Prepare AI Input
     history_buffer.append(current_row)
-    if len(history_buffer) > 5:
-        history_buffer.pop(0)
+    if len(history_buffer) > 5: history_buffer.pop(0)
 
     history_array = np.array(history_buffer)
     history_scaled = scaler_X.transform(history_array)
@@ -94,22 +104,33 @@ def run_simulation_step(new_tps, is_braking=False):
     prediction_real = scaler_y.inverse_transform(prediction_scaled.numpy())[0]
     ai_rpm = prediction_real[0]
 
-    # Dynamic Range Correction
+    # 3. Dynamic RPM Calculation (The "Feel")
     if active_tps <= 2.0:
-        res_rpm = (ai_rpm * 0.2) + (1192.0 * 0.8)
-        if is_braking: res_rpm *= 0.9
-    elif 3.0 < active_tps < 4.8:
-        weight = (active_tps - 3.0) / (4.8 - 3.0)
-        target_mid = 7500.0
-        res_rpm = (ai_rpm * (1 - weight)) + (target_mid * weight)
-    elif active_tps >= 4.8:
-        res_rpm = (ai_rpm * 0.2) + (9000.0 * 0.8)
+        res_rpm = (ai_rpm * 0.1) + (1192.0 * 0.9)
     else:
-        res_rpm = ai_rpm
+        weight = (active_tps - 2.0) / (4.8 - 2.0)
+        target_rpm = 1192.0 + (weight * (9000.0 - 1192.0))
+        res_rpm = (ai_rpm * 0.2) + (target_rpm * 0.8)
 
-    final_speed = current_row[7] if is_braking else prediction_real[1]
-    history_buffer[-1][4], history_buffer[-1][7] = res_rpm, final_speed
-    history_buffer[-1][10], history_buffer[-1][6] = prediction_real[2], prediction_real[3]
+    # 4. GEAR PHYSICS: Calculate Speed from RPM
+    # Formula: Speed (km/h) = (RPM * Wheel_Circ * 60) / (Gear_Ratio * Final_Drive * 1000)
+    ratio = GEAR_RATIOS.get(gear, 0.0)
+
+    if ratio > 0 and not is_braking:
+        # Calculate theoretical speed based on current engine RPM
+        calculated_speed = (res_rpm * WHEEL_CIRCUMFERENCE * 60) / (ratio * FINAL_DRIVE * 1000)
+        # Blend with AI speed for "momentum" effect
+        final_speed = (calculated_speed * 0.7) + (prediction_real[1] * 0.3)
+    elif is_braking:
+        final_speed = max(0, current_row[7] * 0.85)
+    else:
+        final_speed = 0  # Neutral or stopped
+
+    # 5. Sanity Checks & Buffer Update
+    res_rpm = max(800.0, min(9500.0, res_rpm))
+
+    history_buffer[-1][4] = res_rpm
+    history_buffer[-1][7] = final_speed
 
     return [res_rpm, prediction_real[2], prediction_real[3], final_speed]
 
@@ -172,8 +193,10 @@ try:
         current_tps = 1.889 + (5.0 - 1.889) * exp_factor
 
         # 3. RUN INFERENCE AND SEND
-        results = run_simulation_step(current_tps, is_braking=brake_input)
-        send_to_java(results[0], results[3], honk_active)
+        results = run_simulation_step(current_tps, current_gear, is_braking=brake_input)
+
+        # Then send the data to Java
+        send_to_java(results[0], results[3], honk_active, current_gear)
         # 4. PRINT (Single line update)
         print(
             f"Acc: {btn_pressed} | Brk: {int(brake_input)} | Gear: {current_gear} | TPS: {current_tps:.2f} | RPM: {results[0]:.2f}",

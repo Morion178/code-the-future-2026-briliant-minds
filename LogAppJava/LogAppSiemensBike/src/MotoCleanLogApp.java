@@ -1,131 +1,152 @@
-import javax.swing.*;//bib. fereastra (JButton, Jlabel, Jframe)
-import javax.swing.table.DefaultTableModel;//face structura tebelului csv
-import javax.swing.border.LineBorder;//borduri
-import java.awt.*;//pentru grafica(Color, Font)
-import java.io.*;//pentru a scrie in csv
-import java.net.DatagramPacket;//pentru a primii pachetul UDP
-import java.net.DatagramSocket;//canaul UDP
-import java.util.ArrayList;//pt linia din chart
-
+import javax.swing.*;
+import javax.swing.table.DefaultTableModel;
+import javax.swing.border.LineBorder;
+import java.awt.*;
+import java.io.*;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
+import java.util.ArrayList;
+import javax.sound.sampled.*; // New import for audio
 
 public class MotoCleanLogApp extends JFrame {
-    private boolean isDisplayActive = false;//pentru a putea face functional butnul start/stop monitoring, cand este fals ignora datele trimise prin port dac este true incepe afisarea
-    private CardLayout cardLayout = new CardLayout();//permite schimbarea ecranelor de la asteptat la dash
+    private boolean isDisplayActive = false;
+    private CardLayout cardLayout = new CardLayout();
     private JPanel mainPanel = new JPanel(cardLayout);
 
-    private JLabel lblRPM, lblViteza, lblTemp, lblEmisii, lblConsum, lblEcoMode, lblHonkIndicator;//container text pastreaza ref zona dash
-    private LiveChart liveChart;//obiectul chart
+    private JLabel lblRPM, lblViteza, lblTemp, lblEmisii, lblConsum, lblEcoMode, lblHonkIndicator;
+    private LiveChart liveChart;
 
-    private final int PORT = 5005;//canal UDP pt receptie date mathlab
-    private final String FILE_NAME = "telemetrie.csv";//csv salvare date
-    private boolean isConnected = false;//mem. daca a sosit primul pachet date UDP
-    private boolean wasHonking = false; //previne repetarea sunetului la fiecare pachet si presupun ca la inceput de app e 0
-    //tema color
+    private final int PORT = 5005;
+    private final String FILE_NAME = "telemetrie.csv";
+    private boolean isConnected = false;
+    private boolean wasHonking = false;
+
+    private Clip honkClip; // Audio clip object
+
     private final Color COLOR_BG = new Color(10, 11, 15);
     private final Color COLOR_ACCENT = new Color(0, 255, 200);
-    //cand run
-    public MotoCleanLogApp() {
-        resetFile();//sa stearga date precedente csv
-        initUI();//construieste fereastra
-        startUDPListener();//incepe sa pazaesca portul UDP
-    }
-    //interfata grafica
-    private void initUI() {
-        setTitle("TELEMETRY SYSTEM V4.0");//nume platforma
-        setSize(1100, 750);//dim. fereastra
-        setDefaultCloseOperation(EXIT_ON_CLOSE);//exit on close
 
-        //pagina asteptare conectare
-        //creare panel
+    public MotoCleanLogApp() {
+        resetFile();
+        initUI();
+        loadHonkSound(); // Load the audio file into memory
+        startUDPListener();
+    }
+
+    // New method to load your .wav file
+    private void loadHonkSound() {
+        try {
+            // Ensure honk.wav is in your project root folder
+            File soundFile = new File("C:\\Users\\Omen\\Desktop\\TemeFac\\AN2\\SiemensHackaton\\code-the-future-2026-briliant-minds\\LogAppJava\\LogAppSiemensBike\\src\\Goofy ahh car honk sound effect.wav");
+            AudioInputStream audioStream = AudioSystem.getAudioInputStream(soundFile);
+            honkClip = AudioSystem.getClip();
+            honkClip.open(audioStream);
+        } catch (Exception e) {
+            System.err.println("Audio Error: " + e.getMessage());
+        }
+    }
+
+    private void playHonk() {
+        if (honkClip != null) {
+            honkClip.setFramePosition(0); // Rewind to start
+            honkClip.start();
+        }
+    }
+
+    private void initUI() {
+        setTitle("TELEMETRY SYSTEM V4.0");
+        setSize(1100, 750);
+        setDefaultCloseOperation(EXIT_ON_CLOSE);
+
         JPanel startPage = new JPanel(new GridBagLayout());
-        startPage.setBackground(COLOR_BG);//folosim peste tot aceeasi culoare de fundal
-        JPanel logoContainer = new JPanel(new BorderLayout(15, 15));//container
-        logoContainer.setOpaque(false);//
-        //text pagina
-        JLabel lblLogo = new JLabel("<html><center><font color='#888888' size='4'>CORE UNIT</font><br>" + "<b style='letter-spacing: 5px;'>SYSTEM INITIALIZED</b></center></html>", SwingConstants.CENTER);//
+        startPage.setBackground(COLOR_BG);
+        JPanel logoContainer = new JPanel(new BorderLayout(15, 15));
+        logoContainer.setOpaque(false);
+
+        JLabel lblLogo = new JLabel("<html><center><font color='#888888' size='4'>CORE UNIT</font><br>" + "<b style='letter-spacing: 5px;'>SYSTEM INITIALIZED</b></center></html>", SwingConstants.CENTER);
         lblLogo.setFont(new Font("Segoe UI", Font.BOLD, 42));
-        lblLogo.setForeground(COLOR_ACCENT);//folosim culorile din tema
-        //text asteapta conectare + port
+        lblLogo.setForeground(COLOR_ACCENT);
+
         JLabel lblSubText = new JLabel("AWAITING UDP TELEMETRY STREAM [PORT " + PORT + "]", SwingConstants.CENTER);
         lblSubText.setFont(new Font("Monospaced", Font.PLAIN, 13));
         lblSubText.setForeground(Color.GRAY);
-        //bara de progress care cerste gradual foarte incet
+
         JProgressBar bootBar = new JProgressBar();
         bootBar.setIndeterminate(true);
-        bootBar.setPreferredSize(new Dimension(300, 3));//dimens
+        bootBar.setPreferredSize(new Dimension(300, 3));
         bootBar.setBackground(new Color(20, 20, 25));
         bootBar.setForeground(COLOR_ACCENT);
         bootBar.setBorder(null);
-        //adauga el. in Container
+
         logoContainer.add(lblLogo, BorderLayout.NORTH);
         logoContainer.add(lblSubText, BorderLayout.CENTER);
         logoContainer.add(bootBar, BorderLayout.SOUTH);
         startPage.add(logoContainer);
-        //creare panel dash
+
         JPanel dashboardPage = createProfessionalDashboard();
-        //add in container main pannel la pagina asteptare si dash
+
         mainPanel.add(startPage, "START");
         mainPanel.add(dashboardPage, "DASHBOARD");
         add(mainPanel);
         setLocationRelativeTo(null);
         setVisible(true);
     }
-    //dash profesional
+
     private JPanel createProfessionalDashboard() {
-        //creez pannel
         JPanel panel = new JPanel(new BorderLayout(20, 20));
         panel.setBackground(COLOR_BG);
         panel.setBorder(BorderFactory.createEmptyBorder(25, 25, 25, 25));
-        //partea de sus a paginii dash(partea principala RPM si viteza)
+
         JPanel topGrid = new JPanel(new FlowLayout(FlowLayout.CENTER, 60, 10));
         topGrid.setOpaque(false);
-        //sunt circ display amandoua
+
         lblRPM = createCircularDisplay("0", "RPM", new Color(46, 204, 113));
         lblViteza = createCircularDisplay("0", "KM/H", new Color(52, 152, 219));
-        //le dau add in topgrid
+
         topGrid.add(lblRPM);
         topGrid.add(lblViteza);
-        // partea de mijloc date mai neimportante(temp, co2, si economy si honk)
+
         JPanel midPanel = new JPanel(new GridLayout(1, 5, 15, 0));
         midPanel.setOpaque(false);
         midPanel.setPreferredSize(new Dimension(0, 100));
-        //de tip small dysplay
+
         lblTemp = createSmallDisplay("0.0°C", "TEMP", Color.ORANGE);
         lblEmisii = createSmallDisplay("0", "CO2 ppm", Color.WHITE);
         lblConsum = createSmallDisplay("0.0 L", "FUEL", new Color(231, 76, 60));
-        lblEcoMode = new JLabel("<html><center>MODE<br><font color='gray'>DRIVE</font></center></html>", SwingConstants.CENTER);
+
+        // This will now show the Gear
+        lblEcoMode = new JLabel("<html><center>GEAR<br><font color='gray'>N</font></center></html>", SwingConstants.CENTER);
         lblEcoMode.setOpaque(true);
         lblEcoMode.setBackground(new Color(25, 25, 30));
         lblEcoMode.setForeground(Color.WHITE);
         lblEcoMode.setBorder(BorderFactory.createLineBorder(new Color(40, 40, 50)));
-        //honk l-am adaugat mai tarziu:( si este buton care doar isi schimba culoarea si scoate sunet de notif
+
         lblHonkIndicator = new JLabel("HORN", SwingConstants.CENTER);
         lblHonkIndicator.setOpaque(true);
         lblHonkIndicator.setBackground(new Color(25, 25, 30));
         lblHonkIndicator.setForeground(Color.DARK_GRAY);
         lblHonkIndicator.setBorder(BorderFactory.createLineBorder(new Color(40, 40, 50)));
-        //add catre zona midpannel
+
         midPanel.add(lblTemp);
         midPanel.add(lblEmisii);
         midPanel.add(lblConsum);
         midPanel.add(lblEcoMode);
         midPanel.add(lblHonkIndicator);
-        //adaugare zone precedente
+
         JPanel upperDashboard = new JPanel(new BorderLayout(20, 20));
         upperDashboard.setOpaque(false);
         upperDashboard.add(topGrid, BorderLayout.NORTH);
         upperDashboard.add(midPanel, BorderLayout.CENTER);
-        // footer
-        //am facut chartul
+
         liveChart = new LiveChart();
         liveChart.setPreferredSize(new Dimension(0, 180));
         JPanel footer = new JPanel(new BorderLayout(10, 10));
         footer.setOpaque(false);
-        //butonul de csv
+
         JButton btnHistory = new JButton("VIEW DATA LOGS");
         styleButton(btnHistory);
         btnHistory.addActionListener(e -> openHistoryWindow());
-        //butonul de start stop monitoring care da toggle la daca sa asculte canalul UDP sau nu
+
         JPanel buttonWrapper = new JPanel(new FlowLayout(FlowLayout.CENTER));
         buttonWrapper.setOpaque(false);
         JButton btnStartDisplay = new JButton("START MONITORING");
@@ -133,10 +154,9 @@ public class MotoCleanLogApp extends JFrame {
         btnStartDisplay.setPreferredSize(new Dimension(200, 30));
         btnStartDisplay.setBackground(new Color(46, 204, 113));
         btnStartDisplay.setForeground(Color.WHITE);
-        //action listener
+
         btnStartDisplay.addActionListener(e -> {
             isDisplayActive = !isDisplayActive;
-            //se schimba textul in fct de daca este apasat sau nu(stare)+culaorea
             btnStartDisplay.setText(isDisplayActive ? "STOP MONITORING" : "START MONITORING");
             btnStartDisplay.setBackground(isDisplayActive ? new Color(231, 76, 60) : new Color(46, 204, 113));
         });
@@ -144,14 +164,13 @@ public class MotoCleanLogApp extends JFrame {
         buttonWrapper.add(btnStartDisplay);
         footer.add(buttonWrapper, BorderLayout.CENTER);
         footer.add(btnHistory, BorderLayout.SOUTH);
-        //ordinea de cum le adaug in pannel in zona de footer
+
         panel.add(upperDashboard, BorderLayout.NORTH);
         panel.add(liveChart, BorderLayout.CENTER);
-        //le-am bagat in zona de footer
         panel.add(footer, BorderLayout.SOUTH);
         return panel;
     }
-    //metoda sa fac RPM si viteza cercuri
+
     private JLabel createCircularDisplay(String val, String unit, Color accentColor) {
         JLabel lbl = new JLabel("<html><center><font size='4' color='gray'>" + unit + "</font><br><font size='7' color='white' face='Monospaced'><b>" + val + "</b></font></center></html>", SwingConstants.CENTER) {
             @Override
@@ -175,61 +194,56 @@ public class MotoCleanLogApp extends JFrame {
         lbl.setPreferredSize(new Dimension(250, 250));
         return lbl;
     }
-    //cum procesez datele venite de pe UDPport
+
     private void processData(String data) {
         try {
-            //vin sub forma de string ca in csv si le dau split
             String[] p = data.split(",");
-            if (p.length >= 6) {
-                //stiu ordinea lor ca sunt grupate ca in csv si stiu si ce tip de val astept
+            // Changed to length >= 7 to accommodate Gear
+            if (p.length >= 7) {
                 double rpm = Double.parseDouble(p[0]);
                 double speed = Double.parseDouble(p[1]);
                 double temp = Double.parseDouble(p[2]);
                 double co2 = Double.parseDouble(p[3]);
                 double l100 = Double.parseDouble(p[4]);
                 int honk = Integer.parseInt(p[5]);
-                //le salvez in csv
+                int gear = Integer.parseInt(p[6]); // New gear variable
+
                 saveToFile(data);
-                //doar daca s-a apsat start monitoring
+
                 if (isDisplayActive) {
                     SwingUtilities.invokeLater(() -> {
-                        //se schimba textul din labels de la 0 la ce val vin din port
                         lblRPM.setText(formatLarge((int)rpm + "", "RPM"));
                         lblViteza.setText(formatLarge((int)speed + "", "KM/H"));
                         lblTemp.setText(formatSmall(temp + "°C", "TEMP"));
                         lblEmisii.setText(formatSmall((int)co2 + "", "CO2"));
                         lblConsum.setText(formatSmall(String.format("%.1f L", l100), "ECONOMY"));
-                        //aici verific daca se conzidera in mod eco sau nu
-                        if (l100 > 0 && l100 < 5.0) {
-                            lblEcoMode.setText("● ECO ACTIVE");
-                            lblEcoMode.setForeground(new Color(46, 204, 113));
-                        } else {
-                            lblEcoMode.setText("○ ECO INACTIVE");
-                            lblEcoMode.setForeground(Color.DARK_GRAY);
-                        }
-                        //am claxon sau nu am claxon
+
+                        // Update Gear Display
+                        String gearText = (gear == 0) ? "N" : "G" + gear;
+                        lblEcoMode.setText("<html><center>GEAR<br><font color='#00FFC8' size='6'>" + gearText + "</font></center></html>");
+
                         if (honk == 1) {
                             lblHonkIndicator.setBackground(new Color(46, 204, 113));
                             lblHonkIndicator.setForeground(Color.BLACK);
-                            //ca sa nu coxoneze incontinuu verific daca data precedent a fost 0
                             if (!wasHonking) {
-                                //daca var este false adica nu s-a claxonat deja pot sa claxonez
-                                Toolkit.getDefaultToolkit().beep(); // sunet notificare
-                                wasHonking = true;// schimb var ca sa nu claxonez incontinuu chiar daca datele mele vin 1 la honk
+                                playHonk(); // Use custom sound
+                                wasHonking = true;
                             }
                         } else {
                             lblHonkIndicator.setBackground(new Color(25, 25, 30));
                             lblHonkIndicator.setForeground(Color.DARK_GRAY);
-                            wasHonking = false; //il resetam daca nu a fost honk
+                            wasHonking = false;
                         }
 
-                        liveChart.addValue(speed);//pun valoarea in chart
+                        liveChart.addValue(speed);
                     });
                 }
             }
-        } catch (Exception e) {}
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
-    //pentru formatare micile patrate de TEMP CO@ si eco
+
     private JLabel createSmallDisplay(String v, String t, Color c) {
         JLabel l = new JLabel(formatSmall(v, t), SwingConstants.CENTER);
         l.setOpaque(true);
@@ -237,48 +251,44 @@ public class MotoCleanLogApp extends JFrame {
         l.setBorder(BorderFactory.createMatteBorder(0, 0, 3, 0, c));
         return l;
     }
-    //generatoare de cod html si se respecta pt formatare
+
     private String formatLarge(String v, String u) { return "<html><center><font size='65' face='Monospaced'>" + v + "</font><br><font size='4'>" + u + "</font></center></html>"; }
     private String formatSmall(String v, String t) { return "<html><center><font color='#888888' face='Arial' size='3'>" + t + "</font><br><font size='22' face='Monospaced' color='white'>" + v + "</font></center></html>"; }
     private void styleButton(JButton b) { b.setBackground(new Color(25,25,30)); b.setForeground(Color.WHITE); b.setBorder(new LineBorder(COLOR_ACCENT)); b.setCursor(new Cursor(Cursor.HAND_CURSOR)); }
-    //incepe asculatarea pe port
+
     private void startUDPListener() {
         new Thread(() -> {
-            //pe thread separat pentru a fi eficient
             try (DatagramSocket s = new DatagramSocket(PORT)) {
-                //fac un canal nou
-                byte[] buf = new byte[1024];//creez buffer
-                while (true) {//permanent
-                    DatagramPacket p = new DatagramPacket(buf, buf.length);//creez pachet de date
-                    s.receive(p);//porneste receive care parseaza datele
-                    if (!isConnected) { isConnected = true; SwingUtilities.invokeLater(() -> cardLayout.show(mainPanel, "DASHBOARD")); }// daca vin datele se inchide pannel de asteptat si se deschide pannel de dash
-                    processData(new String(p.getData(), 0, p.getLength()).trim());//process data proceseaza inf si le baga sub forma d esting ca sa le pot parsa
+                byte[] buf = new byte[1024];
+                while (true) {
+                    DatagramPacket p = new DatagramPacket(buf, buf.length);
+                    s.receive(p);
+                    if (!isConnected) {
+                        isConnected = true;
+                        SwingUtilities.invokeLater(() -> cardLayout.show(mainPanel, "DASHBOARD"));
+                    }
+                    processData(new String(p.getData(), 0, p.getLength()).trim());
                 }
             } catch (Exception e) {}
         }).start();
     }
-    //salveaza in csv sub forma usuala
+
     private void saveToFile(String l) { try (FileWriter fw = new FileWriter(FILE_NAME, true); PrintWriter pw = new PrintWriter(fw)) { pw.println(System.currentTimeMillis() + "," + l); } catch (Exception e) {} }
-    //metoda care sterge datele precedente din csv la restart page
-    private void resetFile() { try (PrintWriter pw = new PrintWriter(new FileWriter(FILE_NAME, false))) { pw.println("Time,RPM,Speed,Temp,CO2,Consum,Honk"); } catch (Exception e) {} }
-    //metoda care ma lasa sa accesez pannelul de istprie date
+    private void resetFile() { try (PrintWriter pw = new PrintWriter(new FileWriter(FILE_NAME, false))) { pw.println("Time,RPM,Speed,Temp,CO2,Consum,Honk,Gear"); } catch (Exception e) {} }
+
     private void openHistoryWindow() {
-        //pannel nou
         JFrame f = new JFrame("History Log");
-        //de tip table ca sa semene cu csv
-        DefaultTableModel m = new DefaultTableModel(new String[]{"Time", "RPM", "Speed", "Temp", "CO2", "L/100", "Honk"}, 0);
-        //baga el in table
+        DefaultTableModel m = new DefaultTableModel(new String[]{"Time", "RPM", "Speed", "Temp", "CO2", "L/100", "Honk", "Gear"}, 0);
         try (BufferedReader br = new BufferedReader(new FileReader(FILE_NAME))) {
             br.readLine(); String line;
             while ((line = br.readLine()) != null) m.addRow(line.split(","));
         } catch (Exception e) {}
-        f.add(new JScrollPane(new JTable(m))); f.setSize(700, 400); f.setLocationRelativeTo(this); f.setVisible(true);
+        f.add(new JScrollPane(new JTable(m))); f.setSize(750, 400); f.setLocationRelativeTo(this); f.setVisible(true);
     }
-    //the main
+
     public static void main(String[] args) { new MotoCleanLogApp(); }
-    //clasa chart
+
     class LiveChart extends JPanel {
-        //baga in lista de double
         private ArrayList<Double> values = new ArrayList<>();
         private final int MAX_POINTS = 50;
         private final int MARGIN_LEFT = 50, MARGIN_BOTTOM = 40, MARGIN_TOP = 20;
