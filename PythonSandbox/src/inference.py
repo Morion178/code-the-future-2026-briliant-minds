@@ -4,6 +4,7 @@ import numpy as np
 import serial
 import time
 import math
+import socket
 from model import EngineTwinModel
 
 # --- 1. INITIALIZE MODEL & SCALERS ---
@@ -17,6 +18,34 @@ scaler_y = joblib.load("../models/scaler_y.pkl")
 # --- 2. SERIAL SETUP ---
 SERIAL_PORT = 'COM15'
 BAUD_RATE = 115200
+# --- 2.1 UDP SETUP ---
+UDP_IP = "127.0.0.1"  # "127.0.0.1" if Java is on the same PC
+UDP_PORT = 5005       # Pick a port (ensure it's the same in Java)
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+
+def send_to_java(rpm, speed, honk):
+    """
+    Java expects: RPM, Speed, Temp, CO2, L/100, Honk (6 parts)
+    """
+    # 1. Simple math for extra 'realism' in the dashboard
+    sim_temp = 85.0 + (rpm / 2000.0)  # Temp rises slightly with RPM
+    sim_co2 = 120 + (rpm / 10.0)  # CO2 rises with RPM
+    sim_l100 = 0.0 if speed < 5 else (rpm / 1200.0)  # Fuel consumption logic
+
+    # 2. Construct the 6-part string
+    # Format: RPM, Speed, Temp, CO2, L/100, Honk
+    data_list = [
+        round(rpm, 1),
+        round(speed, 1),
+        round(sim_temp, 1),
+        round(sim_co2, 0),
+        round(sim_l100, 1),
+        int(honk)
+    ]
+
+    message = ",".join(map(str, data_list))
+    sock.sendto(message.encode(), (UDP_IP, UDP_PORT))
 
 try:
     ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=0.1)
@@ -142,16 +171,18 @@ try:
         exp_factor = (math.exp(k_val * t_progress) - 1) / (math.exp(k_val) - 1)
         current_tps = 1.889 + (5.0 - 1.889) * exp_factor
 
-        # 3. RUN INFERENCE
+        # 3. RUN INFERENCE AND SEND
         results = run_simulation_step(current_tps, is_braking=brake_input)
-
+        send_to_java(results[0], results[3], honk_active)
         # 4. PRINT (Single line update)
         print(
             f"Acc: {btn_pressed} | Brk: {int(brake_input)} | Gear: {current_gear} | TPS: {current_tps:.2f} | RPM: {results[0]:.2f}",
             end='\r')
 
         # 5. CONSTANT 50Hz TIMING
-        time.sleep(0.02)
+        elapsed = time.time() - start_time
+        sleep_time = max(0.001, 0.02 - elapsed)
+        time.sleep(sleep_time)
 
 except KeyboardInterrupt:
     if ser: ser.close()
